@@ -1,0 +1,12 @@
+.venv-langchain/
+
+.idea/
+
+.env
+.env.*
+.env-*
+
+*.pyc
+__pycache__
+
+.git/
