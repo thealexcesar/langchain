@@ -1,11 +1,10 @@
-.venv-langchain/
+.git
+.gitignore
 
 .idea/
-
 .env
 .env.*
+.venv-*
 
 *.pyc
 __pycache__
-
-.git/
