@@ -1,1 +1,4 @@
-OPENAI_API_KEY=<openai_api_key>
+AZURE_API_KEY=<api-key>
+AZURE_DEPLOYMENT=<model>
+AZURE_ENDPOINT=https:<endpoint>
+AZURE_API_VERSION=<version>
