@@ -81,7 +81,7 @@ def query_sql(user_query):
     """
 
     for attempt in range(5):
-        logger.info("Attempt %s to generate SQL query.", attempt+1)
+        logger.info("Attempt %s to generate SQL query.", attempt + 1)
         plan = llm.predict(planning_prompt).strip()
         logger.info("\nGenerated plan: \n%s", plan)
 
@@ -116,10 +116,13 @@ def query_sql(user_query):
                 if not query_result:
                     logger.warning("The query returned no results.")
                     if attempt < 2:
-                        print("No results found. Trying adifferent approach...")
-                        planning_prompt +="\nPlease simplify your plan or consider alternative tables."
+                        print("No results found. Trying a different approach...")
+                        planning_prompt += "\nPlease simplify your plan or consider alternative tables."
                         continue
                     return "The query returned no results."
+
+                # Add debug logs to inspect the full set of results.
+                logger.info("Full query results: %s", formatted_results)
 
                 answer_prompt = f"""
                 The user's question was: "{user_query}"
@@ -170,6 +173,7 @@ def query_sql(user_query):
             except Exception as e:
                 logger.error(f"Could not execute the alternative query: {e}")
                 return "Could not execute the query. Please check if your question is related to the available data."
+
 
 def clear_query(query):
     query = re.sub(r'```sql|```', '', query, flags=re.IGNORECASE)
