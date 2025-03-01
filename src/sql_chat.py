@@ -83,7 +83,7 @@ def query_sql(user_query):
     for attempt in range(5):
         logger.info("Attempt %s to generate SQL query.", attempt+1)
         plan = llm.predict(planning_prompt).strip()
-        logger.info("\nGenerated plan: %s\n", plan)
+        logger.info("\nGenerated plan: \n%s", plan)
 
         sql_prompt = f"""
         {schema_info}
