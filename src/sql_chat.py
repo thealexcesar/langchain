@@ -1,6 +1,6 @@
+import logging
 import os
 import sqlite3
-import time
 import dotenv
 from langchain.agents import initialize_agent, AgentType
 from langchain_openai import AzureChatOpenAI
@@ -9,6 +9,12 @@ from langchain.tools import Tool
 dotenv.load_dotenv()
 DB_PATH = "data/temp.db"
 
+logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(levelname)s - %(filename)s:%(lineno)d - %(funcName)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
 llm = AzureChatOpenAI(
     azure_deployment=os.getenv("AZURE_DEPLOYMENT"),
     api_version=os.getenv("AZURE_API_VERSION"),
@@ -16,114 +22,161 @@ llm = AzureChatOpenAI(
     azure_endpoint=os.getenv("AZURE_ENDPOINT"),
 )
 
-def get_metadata(db_path):
+def get_enhanced_metadata(db_path):
+    """Get enhanced metadata from the database, including information about tables and data samples."""
     connection = sqlite3.connect(db_path)
     cursor = connection.cursor()
+
     cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
     tables = cursor.fetchall()
 
     metadata = {}
+    sample_data = {}
+
     for table in tables:
         table_name = table[0]
         cursor.execute(f"PRAGMA table_info({table_name})")
-        columns = [row[1] for row in cursor.fetchall()]
+        columns_info = cursor.fetchall()
+        columns = [{"name": row[1], "type": row[2]} for row in columns_info]
+
+        try:
+            cursor.execute(f"SELECT * FROM {table_name} LIMIT 1")
+            sample = cursor.fetchall()
+            if sample:
+                sample_data[table_name] = sample
+                logger.info("SAMPLE DATA: %s", sample_data)
+        except Exception as e:
+            logger.error("Sample Data Exception:", e)
+            pass
+
         metadata[table_name] = columns
-
     connection.close()
-    return metadata
+    return metadata, sample_data
 
-generate_sql_tool = Tool(
-    name="SQLQueryGenerator",
-    func=lambda query: generate_sql_agent(query, get_metadata(DB_PATH)),
-    description="Generates an SQL query based on the user's request and the database structure.",
-)
 
-def generate_sql_agent(user_query, metadata):
-    prompt = f"""
-    You are an SQL expert. The database contains the following tables and columns:
-    {metadata}
-    Generate a valid SQL query to answer the following question:
-    "{user_query}"
+def query_sql(user_query):
+    """Execute an SQL query based on the user's question and return an informative response."""
+    metadata, sample_data = get_enhanced_metadata(DB_PATH)
+
+    schema_info = "Database structure:\n"
+    for table, columns in metadata.items():
+        schema_info += f"Table: {table}\n"
+        schema_info += "Columns:\n"
+        for col in columns:
+            schema_info += f"- {col['name']} ({col['type']})\n"
+
+    sample_info = "\nData sample:\n"
+    for table, samples in sample_data.items():
+        if samples:
+            sample_info += f"First line from {table}: {samples[0]}\n"
+
+    planning_prompt = f"""
+    {schema_info}
+    {sample_info}
+
+    The user's question is: "{user_query}"
+
+    1. Identify which tables and columns are relevant to this query.
+    2. Plan how to construct an efficient SQL query.
+    3. Describe your plan step by step.
     """
-    sql_query = llm.predict(prompt).strip()
-    return sql_query
 
-generate_sql_tool = Tool(
-    name="SQLQueryGenerator",
-    func=lambda query: generate_sql_agent(query, get_metadata(DB_PATH)),
-    description="Generates an SQL query based on the user's request and the database structure.",
-)
+    for attempt in range(5):
+        logger.info("Attempt %s to generate SQL query.", attempt+1)
+        plan = llm.predict(planning_prompt).strip()
+        logger.info("Generated plan: %s", plan)
 
-def is_query_relevant(user_query, metadata, max_attempts=3, timeout=1) -> bool:
-    attempts = 0
-    while attempts < max_attempts:
-        prompt = f"""
-        You are an AI assistant analyzing a database. Below is the schema:
-        {metadata}
+        sql_prompt = f"""
+        {schema_info}
+        {sample_info}
 
-        The user asked: "{user_query}"
+        Your plan: {plan}
 
-        Check if the database has the necessary tables and columns to answer the question.
-        Respond with only "YES" if it can be answered using the available data, otherwise respond with only "NO".
+        Based on the above plan and the database structure, generate an appropriate SQL query to answer: "{user_query}"
+
+        Return ONLY the SQL query, without additional explanations.
         """
-        response = llm.predict(prompt).strip().upper()
-        is_relevant = response == "YES"
-        print(f"\nAttempt {attempts+1}: It's relevant: {is_relevant}")
 
-        if is_relevant:
-            return True
+        sql_query = llm.predict(sql_prompt).strip()
 
-        attempts += 1
-        time.sleep(timeout)
-
-    return False
-
-def query_database(user_query, max_attempts=3):
-    metadata = get_metadata(DB_PATH)
-
-    if not is_query_relevant(user_query, metadata):
-        return "The database does not contain enough information to answer your question."
-
-    attempts = 0
-    while attempts < max_attempts:
         try:
             with sqlite3.connect(DB_PATH) as conn:
                 cursor = conn.cursor()
-                sql_prompt = f"""
-                    You are an AI SQL assistant for an SQLite database. The database has the following metadata: {metadata}.
-                    You can only query the tables and columns listed in the metadata.
-                    Generate an SQL query to answer the following question: "{user_query}."
-                    """
-                sql_query = llm.predict(sql_prompt).strip()
-                print(f"Generated SQL Query (Attempt {attempts+1}): {sql_query}")
 
                 cursor.execute(sql_query)
+                column_names = [description[0] for description in cursor.description]
                 query_result = cursor.fetchall()
 
+                formatted_results = []
+                for row in query_result:
+                    formatted_row = {}
+                    for i, col_name in enumerate(column_names):
+                        formatted_row[col_name] = row[i]
+                    formatted_results.append(formatted_row)
+
                 if not query_result:
-                    attempts += 1
-                    print("No data found. Retrying...\n")
-                    continue
+                    logger.warning("The query returned no results.")
+                    if attempt < 2:
+                        print("No results found. Trying adifferent approach...")
+                        planning_prompt +="\nPlease simplify your plan or consider alternative tables."
+                        continue
+                    return "The query returned no results."
 
-                result_prompt = f"""
-                    The user asked: "{user_query}"
-                    The database query returned: "{query_result}"
+                answer_prompt = f"""
+                The user's question was: "{user_query}"
+                The SQL query used was: "{sql_query}"
 
-                    Convert this result into a clear and natural language answer for the user.
-                    """
-                final_response = llm.predict(result_prompt).strip()
+                The results of the query are:
+                {formatted_results}
+
+                Please respond to the user's question in a natural and informative way based on these results.
+                """
+
+                final_response = llm.predict(answer_prompt).strip()
                 return final_response
 
         except Exception as e:
-            print(f"Error executing query (Attempt {attempts+1}): {e}")
-            attempts += 1
+            logger.error(f"SQL query execution failed: {e}")
+            fallback_prompt = f"""
+            {schema_info}
+            {sample_info}
 
-    return "I tried multiple queries but couldn't find relevant data."
+            The SQL query "{sql_query}" failed with the error: {str(e)}
+
+            Please create an alternative SQL query to answer the question: "{user_query}"
+            Make sure to use only existing tables and columns as listed above.
+            """
+
+            alternative_query = llm.predict(fallback_prompt).strip()
+            logger.info(f"Generated alternative SQL query: {alternative_query}")
+
+            try:
+                with sqlite3.connect(DB_PATH) as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(alternative_query)
+                    query_result = cursor.fetchall()
+
+                    if not query_result:
+                        logger.warning("No results could be found for your query.")
+                        return "No results could be found for your query."
+
+                    final_response = llm.predict(f"""
+                    The user's question was: "{user_query}"
+                    The result of the alternative query was: {query_result}
+
+                    Provide a clear answer to the user.
+                    """).strip()
+
+                    return final_response
+            except Exception as e:
+                logger.error(f"Could not execute the alternative query: {e}")
+                return "Could not execute the query. Please check if your question is related to the available data."
+
 
 query_tool = Tool(
-    name="DatabaseQueryTool",
-    func=query_database,
-    description="Use this tool to execute SQL queries in the database. Provide a natural language query."
+    name="SQLQueryTool",
+    func=query_sql,
+    description="Enhanced tool for querying the database. Provides a more structured approach to finding information."
 )
 
 agent_executor = initialize_agent(
@@ -132,4 +185,3 @@ agent_executor = initialize_agent(
     llm=llm,
     verbose=True
 )
-
