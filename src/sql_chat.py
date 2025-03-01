@@ -1,5 +1,6 @@
 import logging
 import os
+import re
 import sqlite3
 import dotenv
 from langchain.agents import initialize_agent, AgentType
@@ -58,17 +59,15 @@ def query_sql(user_query):
     """Execute an SQL query based on the user's question and return an informative response."""
     metadata, sample_data = get_enhanced_metadata(DB_PATH)
 
-    schema_info = "Database structure:\n"
-    for table, columns in metadata.items():
-        schema_info += f"Table: {table}\n"
-        schema_info += "Columns:\n"
-        for col in columns:
-            schema_info += f"- {col['name']} ({col['type']})\n"
+    schema_info = "\n".join(
+        f"Table: {table}\nColumns: {', '.join(col['name'] for col in columns)}"
+        for table, columns in metadata.items()
+    )
 
-    sample_info = "\nData sample:\n"
-    for table, samples in sample_data.items():
-        if samples:
-            sample_info += f"First line from {table}: {samples[0]}\n"
+    sample_info = "\n".join(
+        f"First line from {table}: {samples[0]}"
+        for table, samples in sample_data.items() if samples
+    )
 
     planning_prompt = f"""
     {schema_info}
@@ -84,7 +83,7 @@ def query_sql(user_query):
     for attempt in range(5):
         logger.info("Attempt %s to generate SQL query.", attempt+1)
         plan = llm.predict(planning_prompt).strip()
-        logger.info("Generated plan: %s", plan)
+        logger.info("\nGenerated plan: %s\n", plan)
 
         sql_prompt = f"""
         {schema_info}
@@ -97,7 +96,7 @@ def query_sql(user_query):
         Return ONLY the SQL query, without additional explanations.
         """
 
-        sql_query = llm.predict(sql_prompt).strip()
+        sql_query = llm.predict(clear_query(sql_prompt)).strip()
 
         try:
             with sqlite3.connect(DB_PATH) as conn:
@@ -148,7 +147,7 @@ def query_sql(user_query):
             """
 
             alternative_query = llm.predict(fallback_prompt).strip()
-            logger.info(f"Generated alternative SQL query: {alternative_query}")
+            logger.info("Generated alternative SQL query: %s", alternative_query)
 
             try:
                 with sqlite3.connect(DB_PATH) as conn:
@@ -171,6 +170,13 @@ def query_sql(user_query):
             except Exception as e:
                 logger.error(f"Could not execute the alternative query: {e}")
                 return "Could not execute the query. Please check if your question is related to the available data."
+
+def clear_query(query):
+    query = re.sub(r'```sql|```', '', query, flags=re.IGNORECASE)
+    query = re.sub(r'--.*$', '', query)
+    query = re.sub(r'/\*.*?\*/', '', query, flags=re.DOTALL)
+    query = re.sub(r'[^\w\s\(\)=<>\+\-\*,\.]', '', query)
+    return query.strip()
 
 
 query_tool = Tool(
