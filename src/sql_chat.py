@@ -23,7 +23,7 @@ llm = AzureChatOpenAI(
     azure_endpoint=os.getenv("AZURE_ENDPOINT"),
 )
 
-def get_enhanced_metadata(db_path):
+def get_metadata(db_path):
     """Get enhanced metadata from the database, including information about tables and data samples."""
     connection = sqlite3.connect(db_path)
     cursor = connection.cursor()
@@ -45,19 +45,15 @@ def get_enhanced_metadata(db_path):
             sample = cursor.fetchall()
             if sample:
                 sample_data[table_name] = sample
-                logger.info("SAMPLE DATA: %s", sample_data)
         except Exception as e:
             logger.error("Sample Data Exception:", e)
-            pass
 
         metadata[table_name] = columns
     connection.close()
     return metadata, sample_data
 
-
 def query_sql(user_query):
-    """Execute an SQL query based on the user's question and return an informative response."""
-    metadata, sample_data = get_enhanced_metadata(DB_PATH)
+    metadata, sample_data = get_metadata(DB_PATH)
 
     schema_info = "\n".join(
         f"Table: {table}\nColumns: {', '.join(col['name'] for col in columns)}"
@@ -70,21 +66,16 @@ def query_sql(user_query):
     )
 
     planning_prompt = f"""
-    {schema_info}
-    {sample_info}
+    You are an SQLite expert. Given the database schema and sample data below, generate an efficient SQLite query to answer the user's question.
 
-    The user's question is: "{user_query}"
+    Database Schema: {schema_info}
+    Sample Data: {sample_info}
 
-    1. Identify which tables and columns are relevant to this query.
-    2. Plan how to construct an efficient SQL query.
-    3. Describe your plan step by step.
+    User's question: "{user_query}"
     """
 
     for attempt in range(5):
-        logger.info("Attempt %s to generate SQL query.", attempt + 1)
         plan = llm.predict(planning_prompt).strip()
-        logger.info("\nGenerated plan: \n%s", plan)
-
         sql_prompt = f"""
         {schema_info}
         {sample_info}
@@ -93,87 +84,48 @@ def query_sql(user_query):
 
         Based on the above plan and the database structure, generate an appropriate SQL query to answer: "{user_query}"
 
-        Return ONLY the SQL query, without additional explanations.
+        Return ONLY the SQL query, without additional explanations. No pre-amble.
         """
 
+        sql_query = llm.predict(sql_prompt).strip()
+        logger.info("\nGenerated query: \n%s", sql_query)
         sql_query = llm.predict(clear_query(sql_prompt)).strip()
-
         try:
             with sqlite3.connect(DB_PATH) as conn:
                 cursor = conn.cursor()
-
                 cursor.execute(sql_query)
                 column_names = [description[0] for description in cursor.description]
                 query_result = cursor.fetchall()
 
-                formatted_results = []
-                for row in query_result:
-                    formatted_row = {}
-                    for i, col_name in enumerate(column_names):
-                        formatted_row[col_name] = row[i]
-                    formatted_results.append(formatted_row)
-
                 if not query_result:
                     logger.warning("The query returned no results.")
-                    if attempt < 2:
-                        print("No results found. Trying a different approach...")
-                        planning_prompt += "\nPlease simplify your plan or consider alternative tables."
+                    if attempt < 4:
+                        logger.info("No results found. Trying a different approach...")
                         continue
-                    return "The query returned no results."
 
-                # Add debug logs to inspect the full set of results.
-                logger.info("Full query results: %s", formatted_results)
+                formatted_results = []
+                for row in query_result:
+                    formatted_row = {column_names[i]: row[i] for i in range(len(column_names))}
+                    formatted_results.append(formatted_row)
 
-                answer_prompt = f"""
-                The user's question was: "{user_query}"
-                The SQL query used was: "{sql_query}"
+                final_answer = "<<<BEGIN_SQL_RESULTS>>>\n"
+                for idx, result in enumerate(formatted_results, start=1):
+                    result_str = ", ".join(f"{key}: {value}" for key, value in result.items())
+                    final_answer += f"{idx}. {result_str}\n"
+                final_answer += "<<<END_SQL_RESULTS>>>\n"
+                final_answer += "IMPORTANT: Your final answer MUST include ALL fields shown above in EXACTLY the same format and order.\n"
 
-                The results of the query are:
-                {formatted_results}
-
-                Please respond to the user's question in a natural and informative way based on these results.
-                """
-
-                final_response = llm.predict(answer_prompt).strip()
-                return final_response
+                return final_answer
 
         except Exception as e:
             logger.error(f"SQL query execution failed: {e}")
-            fallback_prompt = f"""
-            {schema_info}
-            {sample_info}
+            if attempt < 4:
+                logger.info("Attempting an alternative query...")
+            else:
+                return "Could not execute query. Check you answer and try again."
+            continue
 
-            The SQL query "{sql_query}" failed with the error: {str(e)}
-
-            Please create an alternative SQL query to answer the question: "{user_query}"
-            Make sure to use only existing tables and columns as listed above.
-            """
-
-            alternative_query = llm.predict(fallback_prompt).strip()
-            logger.info("Generated alternative SQL query: %s", alternative_query)
-
-            try:
-                with sqlite3.connect(DB_PATH) as conn:
-                    cursor = conn.cursor()
-                    cursor.execute(alternative_query)
-                    query_result = cursor.fetchall()
-
-                    if not query_result:
-                        logger.warning("No results could be found for your query.")
-                        return "No results could be found for your query."
-
-                    final_response = llm.predict(f"""
-                    The user's question was: "{user_query}"
-                    The result of the alternative query was: {query_result}
-
-                    Provide a clear answer to the user.
-                    """).strip()
-
-                    return final_response
-            except Exception as e:
-                logger.error(f"Could not execute the alternative query: {e}")
-                return "Could not execute the query. Please check if your question is related to the available data."
-
+    return "Could not execute the query after multiple attempts."
 
 def clear_query(query):
     query = re.sub(r'```sql|```', '', query, flags=re.IGNORECASE)
@@ -186,7 +138,7 @@ def clear_query(query):
 query_tool = Tool(
     name="SQLQueryTool",
     func=query_sql,
-    description="Enhanced tool for querying the database. Provides a more structured approach to finding information."
+    description="Enhanced tool for querying the database."
 )
 
 agent_executor = initialize_agent(
@@ -195,3 +147,4 @@ agent_executor = initialize_agent(
     llm=llm,
     verbose=True
 )
+
