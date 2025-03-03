@@ -74,7 +74,7 @@ def query_sql(user_query):
     User's question: "{user_query}"
     """
 
-    for attempt in range(5):
+    for attempt in range(3):
         plan = llm.predict(planning_prompt).strip()
         sql_prompt = f"""
         {schema_info}
@@ -84,12 +84,13 @@ def query_sql(user_query):
 
         Based on the above plan and the database structure, generate an appropriate SQL query to answer: "{user_query}"
 
-        Return ONLY the SQL query, without additional explanations. No pre-amble.
+        Return ONLY the SQL query, No pre-amble.
         """
 
         sql_query = llm.predict(sql_prompt).strip()
         logger.info("\nGenerated query: \n%s", sql_query)
         sql_query = llm.predict(clear_query(sql_prompt)).strip()
+
         try:
             with sqlite3.connect(DB_PATH) as conn:
                 cursor = conn.cursor()
@@ -126,6 +127,7 @@ def query_sql(user_query):
             continue
 
     return "Could not execute the query after multiple attempts."
+
 
 def clear_query(query):
     query = re.sub(r'```sql|```', '', query, flags=re.IGNORECASE)

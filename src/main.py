@@ -3,7 +3,6 @@ from sql_chat import agent_executor
 def main():
     while True:
         user_query = input("How can I help you? ")
-        
         if user_query == 'exit':
             break
 
