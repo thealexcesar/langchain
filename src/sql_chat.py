@@ -23,6 +23,7 @@ llm = AzureChatOpenAI(
     azure_endpoint=os.getenv("AZURE_ENDPOINT"),
 )
 
+
 def get_metadata(db_path):
     """Get enhanced metadata from the database, including information about tables and data samples."""
     connection = sqlite3.connect(db_path)
@@ -49,8 +50,10 @@ def get_metadata(db_path):
             logger.error("Sample Data Exception:", e)
 
         metadata[table_name] = columns
+        logger.info("Database Metadata: %s", metadata)
     connection.close()
     return metadata, sample_data
+
 
 def query_sql(user_query):
     metadata, sample_data = get_metadata(DB_PATH)
@@ -66,25 +69,28 @@ def query_sql(user_query):
     )
 
     planning_prompt = f"""
-    You are an SQLite expert. Given the database schema and sample data below, generate an efficient SQLite query to answer the user's question.
+    You are an expert in SQLite and I need your help. Below is the schema of the database and some sample data.
 
     Database Schema: {schema_info}
     Sample Data: {sample_info}
 
-    User's question: "{user_query}"
+    The user's question is: "{user_query}"
+
+    Your task is to understand the user's question and generate a plan for the most efficient SQLite query that answers it.
     """
 
     for attempt in range(3):
         plan = llm.predict(planning_prompt).strip()
+
         sql_prompt = f"""
-        {schema_info}
-        {sample_info}
+        Database Schema: {schema_info}
+        Sample Data: {sample_info}
 
         Your plan: {plan}
 
-        Based on the above plan and the database structure, generate an appropriate SQL query to answer: "{user_query}"
-
-        Return ONLY the SQL query, No pre-amble.
+        Now, based on the above, please generate an SQL query to answer: "{user_query}"
+        However, make sure the query is simple and user-friendly, adding aliases humanized(Do not: camelCase, snake_case, use separated words) for fields when using aggregate functions like COUNT.
+        Do not include any SQL syntax explanations. Just the query itself.
         """
 
         sql_query = llm.predict(sql_prompt).strip()
