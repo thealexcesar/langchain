@@ -1,25 +1,14 @@
-import os
-from dotenv import load_dotenv
-from langchain_community.chat_models import ChatOpenAI
+from sql_chat import agent_executor
 
-load_dotenv()
+def main():
+    while True:
+        user_query = input("How can I help you? ")
+        if user_query == 'exit':
+            break
 
-api_key = os.getenv('OPENAI_API_KEY')
+        response = agent_executor.invoke({"input": user_query})
+        print(("output:", response['output']) if 'output' in response else "No valid output received.")
 
-if not api_key:
-    raise ValueError("A chave da API (OPENAI_API_KEY) não foi encontrada no arquivo .env.")
+if __name__ == "__main__":
+    main()
 
-llm = ChatOpenAI(
-    # model="gpt-4o-mini",
-    model="gpt-3.5-turbo",
-    temperature=0.7,
-    openai_api_key=api_key
-)
-
-question = input("O que deseja saber? ")
-
-try:
-    response = llm.predict(question)
-    print("Resposta:", response)
-except Exception as e:
-    print(f"Erro ao obter resposta: {e}")
