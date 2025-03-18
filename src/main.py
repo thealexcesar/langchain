@@ -1,4 +1,4 @@
-from sql_chat import agent_executor
+from crew_sql_chat import agent_executor
 
 def main():
     while True:
