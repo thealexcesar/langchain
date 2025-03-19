@@ -1,7 +1,7 @@
 from langchain.agents import initialize_agent, AgentType
 from langchain.tools import Tool
-from src.credentials_llm import llm
-from src.qa_sql import query_db
+from credentials_llm import AZURE
+from qa_sql import query_db
 
 tool = Tool(
     name="query",
@@ -12,7 +12,7 @@ tool = Tool(
 agent = initialize_agent(
     agent=AgentType.ZERO_SHOT_REACT_DESCRIPTION,
     tools=[tool],
-    llm=llm,
+    llm=AZURE,
     handle_parsing_errors=True,
     verbose=True
 )

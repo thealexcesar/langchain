@@ -1,8 +1,8 @@
 from crewai import Agent, Task, Crew, Process
 from langchain.tools import Tool
 
-from src.credentials_llm import llm
-from src.qa_sql import query_db
+from credentials_llm import AZURE
+from qa_sql import query_db
 
 tool = Tool(
     name="SQL Query Tool",
@@ -17,7 +17,7 @@ agent = Agent(
     tools=[tool],
     verbose=True,
     allow_delegation=True,
-    llm=llm
+    llm=AZURE
 )
 
 task = Task(
