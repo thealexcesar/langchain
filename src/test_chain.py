@@ -1,24 +1,16 @@
 import os
 import sqlite3
 from langchain.agents import Tool, AgentType, initialize_agent
-from langchain_openai import AzureChatOpenAI
 from langchain_core.pydantic_v1 import BaseModel, Field
 from sqlalchemy import create_engine, inspect
+from credentials_llm import AZURE
 import dotenv
-    
+
 dotenv.load_dotenv()
-    
-AZURE = AzureChatOpenAI(
-    azure_deployment=os.getenv("AZURE_DEPLOYMENT"),
-    api_version=os.getenv("AZURE_API_VERSION"),
-    api_key=os.getenv("AZURE_API_KEY"),
-    azure_endpoint=os.getenv("AZURE_ENDPOINT"),
-)
 
 
 class QueryArgsClass(BaseModel):
     sql_query: str = Field(description="SQL query to execute")
-
 
 def sql_query_func(query):
 
